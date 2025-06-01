@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Fiz Meet - Meeting</title>
+  <style>
+    video {
+      width: 45%;
+      border: 1px solid #ccc;
+      margin: 5px;
+    }
+    #chatMessages {
+      height: 150px;
+      overflow-y: scroll;
+      border: 1px solid #ddd;
+      margin-top: 10px;
+      padding: 5px;
+      background: #f9f9f9;
+    }
+    .chat-message {
+      padding: 3px 8px;
+      margin-bottom: 5px;
+      border-radius: 5px;
+      color: white;
+      max-width: 80%;
+      word-wrap: break-word;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Fiz Meet - Meeting Room</h1>
+  <video id="localVideo" autoplay playsinline muted></video>
+  <video id="remoteVideo" autoplay playsinline></video>
+  <br />
+  <button id="toggleMicBtn">Matikan Mic</button>
+  <button id="toggleCamBtn">Matikan Kamera</button>
+  <button id="leaveBtn">Keluar</button>
+
+  <div>
+    <h3>Chat</h3>
+    <div id="chatMessages"></div>
+    <input type="text" id="chatInput" placeholder="Ketik pesan lalu tekan Enter" style="width: 100%;" />
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-app.js";
+    import {
+      getAuth,
+      onAuthStateChanged
+    } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-auth.js";
+    import {
+      getDatabase,
+      ref,
+      get,
+      set,
+      push,
+      onValue
+    } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-database.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyCxo89y-_9g4VilXR3NLmZwJAqanxuAleM",
+      authDomain: "iov-logsheet.firebaseapp.com",
+      databaseURL: "https://iov-logsheet-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "iov-logsheet",
+      storageBucket: "iov-logsheet.firebasestorage.app",
+      messagingSenderId: "932005439734",
+      appId: "1:932005439734:web:b7a0cf98143755260ce4d7",
+      measurementId: "G-RYHSPJEFPZ"
+    };
+
+    // Initialize Firebase
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getDatabase(app);
+
+    let localStream;
+    let peerConnection;
+    let isCaller = false; // Perlu didefinisikan
+    const servers = {
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+    };
+
+    // Ambil roomId dari URL ?room=xxx
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomId = urlParams.get('room');
+    if (!roomId) {
+      alert('Room ID tidak ditemukan.');
+      window.location.href = 'dashboard.html';
+    }
+
+    // DOM elements
+    const localVideo = document.getElementById('localVideo');
+    const remoteVideo = document.getElementById('remoteVideo');
+    const toggleMicBtn = document.getElementById('toggleMicBtn');
+    const toggleCamBtn = document.getElementById('toggleCamBtn');
+    const leaveBtn = document.getElementById('leaveBtn');
+    const chatInput = document.getElementById('chatInput');
+    const chatMessages = document.getElementById('chatMessages');
+
+    let micEnabled = true;
+    let camEnabled = true;
+
+    onAuthStateChanged(auth, user => {
+      if (!user) {
+        alert('Anda harus login terlebih dahulu');
+        window.location.href = 'index.html';
+      } else {
+        startCall().catch(console.error);
+        setupChat(user.uid);
+      }
+    });
+
+    async function startCall() {
+      try {
+        // Ambil media user
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        localVideo.srcObject = localStream;
+
+        peerConnection = new RTCPeerConnection(servers);
+
+        // Kirim track lokal ke peer connection
+        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+        // Referensi database untuk signaling
+        const roomRef = ref(db, 'rooms/' + roomId);
+        const callerCandidatesRef = ref(db, 'rooms/' + roomId + '/callerCandidates');
+        const calleeCandidatesRef = ref(db, 'rooms/' + roomId + '/calleeCandidates');
+
+        // Terima track remote
+        peerConnection.ontrack = event => {
+          if (remoteVideo.srcObject !== event.streams[0]) {
+            remoteVideo.srcObject = event.streams[0];
+          }
+        };
+
+        // Kirim ICE candidate ke Firebase Realtime Database
+        peerConnection.onicecandidate = event => {
+          if (event.candidate) {
+            const candidate = event.candidate.toJSON();
+            if (isCaller) {
+              push(callerCandidatesRef, candidate);
+            } else {
+              push(calleeCandidatesRef, candidate);
+            }
+          }
+        };
+
+        // Ambil data room untuk cek apakah jadi caller atau callee
+        const roomSnapshot = await get(roomRef);
+        if (!roomSnapshot.exists()) {
+          // Jadi caller, buat offer
+          isCaller = true;
+          const offer = await peerConnection.createOffer();
+          await peerConnection.setLocalDescription(offer);
+          await set(roomRef, { offer: { type: offer.type, sdp: offer.sdp } });
+
+          // Tunggu answer dari callee
+          onValue(ref(db, 'rooms/' + roomId + '/answer'), async (snapshot) => {
+            const data = snapshot.val();
+            if (data && !peerConnection.currentRemoteDescription) {
+              const answerDesc = new RTCSessionDescription(data);
+              await peerConnection.setRemoteDescription(answerDesc);
+            }
+          });
+
+          // Dengar calon ICE candidate dari callee
+          onValue(calleeCandidatesRef, (snapshot) => {
+            snapshot.forEach(childSnapshot => {
+              const candidate = new RTCIceCandidate(childSnapshot.val());
+              peerConnection.addIceCandidate(candidate).catch(e => console.warn('Add ICE candidate error', e));
+            });
+          });
+
+        } else {
+          // Jadi callee, ambil offer dan buat answer
+          isCaller = false;
+          const roomData = roomSnapshot.val();
+          await peerConnection.setRemoteDescription(new RTCSessionDescription(roomData.offer));
+
+          const answer = await peerConnection.createAnswer();
+          await peerConnection.setLocalDescription(answer);
+
+          await set(ref(db, 'rooms/' + roomId + '/answer'), { type: answer.type, sdp: answer.sdp });
+
+          // Dengar calon ICE candidate dari caller
+          onValue(callerCandidatesRef, (snapshot) => {
+            snapshot.forEach(childSnapshot => {
+              const candidate = new RTCIceCandidate(childSnapshot.val());
+              peerConnection.addIceCandidate(candidate).catch(e => console.warn('Add ICE candidate error', e));
+            });
+          });
+        }
+
+      } catch (err) {
+        console.error('Error startCall:', err);
+        alert('Gagal memulai panggilan: ' + err.message);
+      }
+    }
+
+    // Toggle Mic
+    toggleMicBtn.onclick = () => {
+      if (localStream) {
+        micEnabled = !micEnabled;
+        localStream.getAudioTracks()[0].enabled = micEnabled;
+        toggleMicBtn.textContent = micEnabled ? 'Matikan Mic' : 'Nyalakan Mic';
+      }
+    };
+
+    // Toggle Camera
+    toggleCamBtn.onclick = () => {
+      if (localStream) {
+        camEnabled = !camEnabled;
+        localStream.getVideoTracks()[0].enabled = camEnabled;
+        toggleCamBtn.textContent = camEnabled ? 'Matikan Kamera' : 'Nyalakan Kamera';
+      }
+    };
+
+    // Leave meeting
+    leaveBtn.onclick = () => {
+      if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+      }
+      window.location.href = 'dashboard.html';
+    };
+
+    // Setup chat realtime
+    function setupChat(userId) {
+      const chatRef = ref(db, 'rooms/' + roomId + '/chat');
+
+      onValue(chatRef, (snapshot) => {
+        chatMessages.innerHTML = '';
+        snapshot.forEach(child => {
+          const msg = child.val();
+          const div = document.createElement('div');
+          div.classList.add('chat-message');
+          div.style.backgroundColor = msg.sender === userId ? '#6a63e7' : '#4f46e5';
+          div.textContent = msg.text;
+          chatMessages.appendChild(div);
+        });
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+      });
+
+      chatInput.addEventListener('keydown', async (e) => {
+        if (e.key === 'Enter' && chatInput.value.trim() !== '') {
+          const msg = chatInput.value.trim();
+          chatInput.value = '';
+          try {
+            await push(chatRef, { sender: userId, text: msg, timestamp: Date.now() });
+          } catch (err) {
+            console.error('Failed to send chat message:', err);
+          }
+        }
+      });
+    }
+  </script>
+</body>
+</html>

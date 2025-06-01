@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Fiz Meet - Dashboard</title>
+<style>
+  body {
+    background: #12142a;
+    color: white;
+    font-family: Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 40px;
+    margin: 0;
+  }
+  h1 {
+    margin-bottom: 30px;
+  }
+  input {
+    padding: 12px;
+    width: 250px;
+    border-radius: 8px;
+    border: none;
+    margin-bottom: 12px;
+    font-size: 16px;
+  }
+  button {
+    background: #4f46e5;
+    border: none;
+    border-radius: 8px;
+    padding: 12px 24px;
+    color: white;
+    font-weight: 700;
+    cursor: pointer;
+    margin: 8px;
+  }
+  #logoutBtn {
+    margin-top: 20px;
+    background: #cc3333;
+  }
+</style>
+</head>
+<body>
+
+<h1>Dashboard Fiz Meet</h1>
+
+<input id="roomInput" type="text" placeholder="Masukkan ID Meeting (atau kosong buat baru)" />
+<button id="joinBtn">Gabung Meeting</button>
+<button id="newRoomBtn">Buat Meeting Baru</button>
+
+<button id="logoutBtn">Logout</button>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getAuth, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyCxo89y-_9g4VilXR3NLmZwJAqanxuAleM",
+    authDomain: "iov-logsheet.firebaseapp.com",
+    databaseURL: "https://iov-logsheet-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "iov-logsheet",
+    storageBucket: "iov-logsheet.firebasestorage.app",
+    messagingSenderId: "932005439734",
+    appId: "1:932005439734:web:b7a0cf98143755260ce4d7",
+    measurementId: "G-RYHSPJEFPZ"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+
+  const roomInput = document.getElementById('roomInput');
+  const joinBtn = document.getElementById('joinBtn');
+  const newRoomBtn = document.getElementById('newRoomBtn');
+  const logoutBtn = document.getElementById('logoutBtn');
+
+  onAuthStateChanged(auth, user => {
+    if (!user) {
+      window.location.href = 'index.html';
+    }
+  });
+
+  joinBtn.onclick = () => {
+    const roomId = roomInput.value.trim();
+    if (!roomId) {
+      alert('Masukkan ID Meeting untuk bergabung.');
+      return;
+    }
+    window.location.href = `meeting.html?room=${roomId}`;
+  };
+
+  newRoomBtn.onclick = () => {
+    const newRoomId = Math.random().toString(36).substring(2, 10);
+    window.location.href = `meeting.html?room=${newRoomId}`;
+  };
+
+  logoutBtn.onclick = async () => {
+    await signOut(auth);
+  };
+</script>
+</body>
+</html>
